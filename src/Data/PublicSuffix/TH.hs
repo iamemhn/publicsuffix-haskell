@@ -12,6 +12,9 @@ import           Control.Applicative
 import           Data.Char
 import           Data.PublicSuffix.Types
 
+import qualified Data.Text    as T
+import qualified Data.Text.IO as TIO
+
 import           Language.Haskell.TH
 import qualified Language.Haskell.TH.Syntax as TH
 
@@ -23,34 +26,36 @@ import           Prelude
 
 readRulesFile :: FilePath -> IO [Rule]
 readRulesFile inputFile = do
-    body <- readFile inputFile
+    body <- TIO.readFile inputFile
     return $ parseRules body
 
-isComment :: String -> Bool
-isComment ('/':'/':_) = True
-isComment _           = False
+isComment :: T.Text -> Bool
+isComment = T.isPrefixOf "//"
 
-splitDot :: String -> [String]
-splitDot [] = [""]
-splitDot x  =
-    let (y, z) = break (== '.') x in
-    y : (if z == "" then [] else splitDot $ drop 1 z)
+splitDot :: T.Text -> [T.Text]
+splitDot ts = if T.null ts then [""]
+                           else T.splitOn "." ts
 
-parseRules :: String -> [Rule]
+parseRules :: T.Text -> [Rule]
 parseRules body =
     map parseRule $
-    filter ruleLine $
-    map (takeWhile (not . isSpace)) $ -- Each line is only read up to the first whitespace.
-    lines body -- The Public Suffix List consists of a series of lines, separated by \n.
+    filter ruleLine $                   -- Only keep rules
+    map (T.takeWhile (not . isSpace)) $ -- read up to the first whitespace.
+    T.lines body                        -- Break list in lines.
 
   where
-    ruleLine line = not $ isComment line || null line
+    ruleLine :: T.Text -> Bool
+    ruleLine line = not $ isComment line || T.null line
 
-    parseRule :: String -> Rule
-    parseRule line = case line of
-        []       -> error "parseRule: unexpected empty line"
-        '!':rest -> Rule { isException = True,  ruleLabels = splitDot rest }
-        _        -> Rule { isException = False, ruleLabels = splitDot line }
+    parseRule :: T.Text -> Rule
+    parseRule line
+      | T.null line            = error "parseRule: unexpected empty line"
+      | T.isPrefixOf "!"  line = Rule { isException = True,
+                                        ruleLabels  = splitDot $ T.tail line
+                                      }
+      | otherwise              = Rule { isException = False,
+                                        ruleLabels  = splitDot line 
+                                      }
 
 
 moduleDirectory :: Q Exp
@@ -58,14 +63,14 @@ moduleDirectory =
     TH.LitE . TH.StringL . dropFileName . TH.loc_filename <$> TH.qLocation
 
 
-mkRules :: String -> FilePath -> Q [Dec]
+mkRules :: T.Text -> FilePath -> Q [Dec]
 mkRules funName filePath = do
     rules <- runIO $ readRulesFile filePath
     rulesE <- mapM genRule rules
 
     return
         [ SigD (mkName "rules") (AppT ListT (ConT ''Rule))
-        , FunD (mkName funName) [Clause [] (NormalB $ ListE $ rulesE) []]
+        , FunD (mkName (T.unpack funName)) [Clause [] (NormalB $ ListE $ rulesE) []]
         ]
 
   where
@@ -78,5 +83,6 @@ mkRules funName filePath = do
         return $ foldl1 AppE
             [ ruleE
             , if isException rule then trueE else falseE
-            , ListE $ reverse $ map (\x -> LitE $ StringL x) (ruleLabels rule)
+            , ListE $ reverse $ map (LitE . StringL . T.unpack)
+                                    (ruleLabels rule)
             ]

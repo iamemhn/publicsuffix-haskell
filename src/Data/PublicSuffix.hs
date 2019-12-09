@@ -7,7 +7,8 @@ module Data.PublicSuffix
 
 import           Data.Function
 import           Data.List
-import           Data.Monoid
+
+import qualified Data.Text as T
 
 import           Data.PublicSuffix.Types
 import           Data.PublicSuffix.Rules
@@ -15,15 +16,10 @@ import           Data.PublicSuffix.Rules
 import           Prelude
 
 
--- | Convert a domain into a list of labels. This is essentialy splitting the
--- string on dots ('.'). However, the Haskell base library doesn't have a split
--- function. Sigh...
-toLabels :: String -> [String]
-toLabels [] = [""]
-toLabels x =
-    let (y, z) = break (== '.') x in
-    y : (if z == "" then [] else toLabels $ drop 1 z)
-
+-- | Convert a domain into a list of labels.
+-- This is essentialy splitting the string on dots ('.')
+toLabels :: T.Text -> [T.Text]
+toLabels = T.splitOn "."
 
 -- | A domain is said to match a rule if and only if all of the following
 -- conditions are met:
@@ -35,7 +31,7 @@ toLabels x =
 --    and continuing for all labels in the rule, one finds that for every pair,
 --    either they are identical, or that the label from the rule is "*".
 
-matchRule :: [String] -> Rule -> Bool
+matchRule :: [T.Text] -> Rule -> Bool
 matchRule domainLabels rule =
     domainLabelsLength >= ruleLabelsLength &&
     all labelMatches (zip (ruleLabels rule) domainLabels)
@@ -46,7 +42,7 @@ matchRule domainLabels rule =
 
 
 -- | True if the label from the rule matches a label from the domain.
-labelMatches :: (String, String) -> Bool
+labelMatches :: (T.Text, T.Text) -> Bool
 labelMatches ("*"      , _          ) = True
 labelMatches (ruleLabel, domainLabel) = ruleLabel == domainLabel
 
@@ -70,7 +66,7 @@ labelMatches (ruleLabel, domainLabel) = ruleLabel == domainLabel
 --  - X509 wildcard certificates which try to match all subdomains of a public
 --    suffix.
 
-publicSuffix :: String -> String
+publicSuffix :: T.Text -> T.Text
 publicSuffix domain =
     -- Algorithm (see https://publicsuffix.org/list/)
     --
@@ -82,7 +78,9 @@ publicSuffix domain =
     --   The public suffix is the set of labels from the domain which match the labels of the prevailing rule, using the matching algorithm above.
     --   The registered or registrable domain is the public suffix plus one additional label.
 
-    mconcat $ intersperse "." $ reverse $ take numMatchingLabels domainLabels
+    T.intercalate "." $
+    reverse $
+    take numMatchingLabels domainLabels
 
   where
     rule              = prevailingRule domainLabels
@@ -90,7 +88,7 @@ publicSuffix domain =
     numMatchingLabels = length $ takeWhile labelMatches $ zip (ruleLabels rule) domainLabels
 
 
-prevailingRule :: [String] -> Rule
+prevailingRule :: [T.Text] -> Rule
 prevailingRule domainLabels = case filter (matchRule domainLabels) rules of
     []  -> Rule False ["*"]
     [x] -> x
@@ -104,10 +102,10 @@ prevailingRule domainLabels = case filter (matchRule domainLabels) rules of
 -- domains are fully controlled by users, and applications SHOULD accept
 -- cookies and wildcard certificates for those.
 
-registeredDomain :: String -> Maybe String
+registeredDomain :: T.Text -> Maybe T.Text
 registeredDomain domain = if domain == suffix
     then Nothing
-    else Just $ mconcat $ intersperse "." $ reverse $ take (suffixLabelsLength + 1) domainLabels
+    else Just $ T.intercalate "." $ reverse $ take (suffixLabelsLength + 1) domainLabels
 
   where
     suffix             = publicSuffix domain
